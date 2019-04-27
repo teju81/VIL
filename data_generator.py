@@ -93,7 +93,7 @@ class DataGenerator(object):
                     self.bias = - np.mean(
                         states.dot(self.scale), axis=0)
                     # Save the scale and bias.
-                    with open('/content/drive/My Drive/Code/mil/data/scale_and_bias_%s.pkl' % FLAGS.experiment, 'wb') as f:
+                    with open('data/scale_and_bias_%s.pkl' % FLAGS.experiment, 'wb') as f:
                         pickle.dump({'scale': self.scale, 'bias': self.bias}, f)
                 for key in demos.keys():
                     demos[key]['demoX'] = demos[key]['demoX'].reshape(-1, len(self.state_idx))

@@ -5,8 +5,8 @@ import numpy as np
 import random
 import tensorflow as tf
 from tensorflow.python.platform import flags
-from mil.tf_utils import *
-from mil.utils import Timer
+from tf_utils import *
+from utils import Timer
 from natsort import natsorted
 
 FLAGS = flags.FLAGS
@@ -282,10 +282,10 @@ class MIL(object):
             im_width = network_config['image_width']
             num_channels = network_config['image_channels']
             flatten_image = tf.reshape(image_input, [-1, im_height*im_width*num_channels])
-            context = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), range(FLAGS.bt_dim)))
+            context = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), list(range(FLAGS.bt_dim))))
             context += weights['context']
             if FLAGS.learn_final_eept:
-                context_final_eept = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), range(FLAGS.bt_dim)))
+                context_final_eept = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), list(range(FLAGS.bt_dim))))
                 context_final_eept += weights['context_final_eept']
         norm_type = self.norm_type
         decay = network_config.get('decay', 0.9)
@@ -580,7 +580,7 @@ class MIL(object):
                 local_lossesa.append(local_lossa)
 
                 # Compute fast gradients
-                grads = tf.gradients(local_lossa, weights.values())
+                grads = tf.gradients(local_lossa, list(weights.values()))
                 gradients = dict(zip(weights.keys(), grads))
                                 
 #                 #compute hessian - for debug
@@ -651,7 +651,7 @@ class MIL(object):
                     local_lossesa.append(loss)
 
                     # Compute fast gradients
-                    grads = tf.gradients(loss, fast_weights.values())
+                    grads = tf.gradients(loss, list(fast_weights.values()))
                     gradients = dict(zip(fast_weights.keys(), grads))
 
 #                     # Hessian - for debug
