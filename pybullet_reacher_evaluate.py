@@ -10,9 +10,9 @@ import imageio as io
 
 import tensorflow as tf
 from tensorflow.python.platform import flags
-from mil.data_generator import DataGenerator
-from mil.mil import MIL
-from mil.utils import load_scale_and_bias
+from data_generator import DataGenerator
+from mil import MIL
+from utils import load_scale_and_bias
 
 FLAGS = flags.FLAGS
 
