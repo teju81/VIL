@@ -35,7 +35,7 @@ class MIL(object):
             with Timer('building TF network'):
                 result = self.construct_model(input_tensors=input_tensors, prefix=prefix, dim_input=self._dO, dim_output=self._dU,
                                           network_config=self.network_params)
-            outputas, outputbs, test_output, lossesa, lossesb, final_eept_lossesb, flat_img_inputb, gradients_op = result
+            inputas, inputbs, outputas, outputbs, smaxas, smaxbs, test_output, lossesa, lossesb, final_eept_lossesb, flat_img_inputb, gradients_op = result
             if 'Testing' in prefix:
                 self.obs_tensor = self.obsa
                 self.state_tensor = self.statea
@@ -78,6 +78,17 @@ class MIL(object):
                 for k,v in self.weights.items():
                   summ.append(tf.summary.histogram('Weights_of_%s' % (k), v))
                 for j in range(self.num_updates):
+                    for task_id in range(smaxas[j].shape[0]):
+                        imga = inputas[j][task_id,23:,:,:,:]
+                        imgb = inputbs[j][task_id,23:,:,:,:]
+                        summ.append(tf.summary.image('Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 1))
+                        summ.append(tf.summary.image('Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 1))
+                        for filt_id in range(smaxas[j].shape[-1]):
+                          filta = smaxas[j][task_id,:,:,:,filt_id:filt_id+1]
+                          filtb = smaxbs[j][task_id,:,:,:,filt_id:filt_id+1]
+                          summ.append(tf.summary.image('Task_%d_Spatial_Softmax_A_%d_Step_%d' % (task_id,filt_id,j),filta, 1))
+                          summ.append(tf.summary.image('Task_%d_Spatial_Softmax_B_%d_Step_%d' % (task_id,filt_id,j),filtb, 1))
+
                     summ.append(tf.summary.scalar(prefix + 'Post-update_loss_step_%d' % j, self.total_losses2[j]))
                     summ.append(tf.summary.scalar(prefix + 'Post-update_final_eept_loss_step_%d' % j, self.total_final_eept_losses2[j]))
                     for k in range(len(self.sorted_weight_keys)):
@@ -90,6 +101,17 @@ class MIL(object):
                 # Add summaries
                 summ = [tf.summary.scalar(prefix + 'Pre-update_loss', self.val_total_loss1)]
                 for j in range(self.num_updates):
+                    for task_id in range(smaxas[j].shape[0]):
+                      imga = inputas[j][task_id,:,:,:]
+                      imgb = inputbs[j][task_id,:,:,:]
+                      summ.append(tf.summary.image('Val_Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 1))
+                      summ.append(tf.summary.image('Val_Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 1))
+                      for filt_id in range(smaxas[j].shape[-1]):
+                        filta = smaxas[j][task_id,:,:,:,filt_id:filt_id+1]
+                        filtb = smaxbs[j][task_id,:,:,:,filt_id:filt_id+1]
+                        summ.append(tf.summary.image('Val_Task_%d_Spatial_Softmax_A_%d_Step_%d' % (task_id,filt_id,j),filta, 1))
+                        summ.append(tf.summary.image('Val_Task_%d_Spatial_Softmax_B_%d_Step_%d' % (task_id,filt_id,j),filtb, 1))
+
                     summ.append(tf.summary.scalar(prefix + 'Post-update_loss_step_%d' % j, self.val_total_losses2[j]))
                     summ.append(tf.summary.scalar(prefix + 'Post-update_final_eept_loss_step_%d' % j, self.val_total_final_eept_losses2[j]))
                 self.val_summ_op = tf.summary.merge(summ)
@@ -105,8 +127,8 @@ class MIL(object):
         im_height = network_config['image_height']
         im_width = network_config['image_width']
         num_channels = network_config['image_channels']
-        image_input = tf.reshape(flat_image_input, [-1, num_channels, im_width, im_height])
-        image_input = tf.transpose(image_input, perm=[0,3,2,1])
+        image_input = tf.reshape(flat_image_input, [-1, im_width, im_height, num_channels]) # For mujoco swap 1 and 3 dimensions in reshape
+        #image_input = tf.transpose(image_input, perm=[0,3,2,1]) # Mujoco
         if FLAGS.pretrain_weight_path != 'N/A':
             image_input = image_input * 255.0 - tf.convert_to_tensor(np.array([103.939, 116.779, 123.68], np.float32))
             # 'RGB'->'BGR'
@@ -311,11 +333,7 @@ class MIL(object):
             else:
                 conv_layer = dropout(norm(conv2d(img=conv_layer, w=weights['wc%d' % (i+1)], b=weights['bc%d' % (i+1)], strides=strides[i], is_dilated=is_dilated), \
                                 norm_type=norm_type, decay=decay, id=i, is_training=is_training, activation_fn=self.activation_fn), keep_prob=prob, is_training=is_training, name='dropout_%d' % (i+1))
-        
-        
-#         conv_layer1 = conv_layernorm_relu_block(img=conv_layer,w=weights['wc%d' % (1)], b=weights['bc%d' % (1)],strides=strides[0],idx=0)
-#         conv_layer2 = conv_layernorm_relu_block(img=conv_layer1,w=weights['wc%d' % (2)], b=weights['bc%d' % (2)],strides=strides[1],idx=1)
-#         conv_layer3 = conv_layernorm_relu_block(img=conv_layer2,w=weights['wc%d' % (3)], b=weights['bc%d' % (3)],strides=strides[2],idx=2)
+
         #self.sp_smax_in = conv_layer3
         if FLAGS.fp:
             _, num_rows, num_cols, num_fp = conv_layer.get_shape()
@@ -402,7 +420,9 @@ class MIL(object):
             final_eept_pred = None
         if FLAGS.fc_bt:
             fc_input = tf.concat(axis=1, values=[fc_input, context])
-        return self.fc_forward(fc_input, weights, state_input=state_input, meta_testing=meta_testing, is_training=is_training, testing=testing, network_config=network_config), final_eept_pred
+        fc_output = self.fc_forward(fc_input, weights, state_input=state_input, meta_testing=meta_testing, is_training=is_training, testing=testing, network_config=network_config)
+        smax = tf.nn.softmax(conv_layer)
+        return smax, fc_output, final_eept_pred
 
     def fc_forward(self, fc_input, weights, state_input=None, meta_testing=False, is_training=True, testing=False, network_config=None):
         n_layers = network_config.get('n_layers', 4)
@@ -547,6 +567,7 @@ class MIL(object):
                     actiona = tf.zeros_like(actiona)
 
                 local_outputas, local_lossesa, local_outputbs, local_lossesb, final_eept_lossesb = [], [], [], [], []
+                smaxas, smaxbs = [], []
                 # Assume fixed data for each update
                 actionas = [actiona]*num_updates
 
@@ -566,10 +587,11 @@ class MIL(object):
 
                 # Pre-update
                 if 'Training' in prefix:
-                    local_outputa, final_eept_preda = self.forward(inputa, state_inputa, weights, network_config=network_config)
+                    smaxa, local_outputa, final_eept_preda = self.forward(inputa, state_inputa, weights, network_config=network_config)
                 else:
-                    local_outputa, final_eept_preda = self.forward(inputa, state_inputa, weights, is_training=False, network_config=network_config)
+                    smaxa, local_outputa, final_eept_preda = self.forward(inputa, state_inputa, weights, is_training=False, network_config=network_config)
                 local_outputas.append(local_outputa)
+                smaxas.append(smaxa)
                 if FLAGS.learn_final_eept:
                     final_eept_lossa = euclidean_loss_layer(final_eept_preda, final_eepta, multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                 else:
@@ -614,10 +636,11 @@ class MIL(object):
                 if FLAGS.no_state:
                     state_inputb = None
                 if 'Training' in prefix:
-                    outputb, final_eept_predb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, network_config=network_config)
+                    smaxb, outputb, final_eept_predb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, network_config=network_config)
                 else:
-                    outputb, final_eept_predb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
+                    smaxb, outputb, final_eept_predb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
                 local_outputbs.append(outputb)
+                smaxbs.append(smaxb)
                 if FLAGS.learn_final_eept:
                     final_eept_lossb = euclidean_loss_layer(final_eept_predb, final_eeptb, multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                 else:
@@ -637,10 +660,11 @@ class MIL(object):
                     if FLAGS.no_state:
                         state_inputa_new = None
                     if 'Training' in prefix:
-                        outputa, final_eept_preda = self.forward(inputas[j+1], state_inputa_new, fast_weights, network_config=network_config)
+                        smaxa, outputa, final_eept_preda = self.forward(inputas[j+1], state_inputa_new, fast_weights, network_config=network_config)
                     else:
-                        outputa, final_eept_preda = self.forward(inputas[j+1], state_inputa_new, fast_weights, is_training=False, testing=testing, network_config=network_config)
-                    local_outputas.append(outputa)    
+                        smaxa, outputa, final_eept_preda = self.forward(inputas[j+1], state_inputa_new, fast_weights, is_training=False, testing=testing, network_config=network_config)
+                    local_outputas.append(outputa)
+                    smaxas.append(smaxa)
                     if FLAGS.learn_final_eept:
                         final_eept_lossa = euclidean_loss_layer(final_eept_preda, final_eeptas[j+1], multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                     else:
@@ -686,10 +710,11 @@ class MIL(object):
                     if FLAGS.no_state:
                         state_inputb = None
                     if 'Training' in prefix:
-                        output, final_eept_predb = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, network_config=network_config)
+                        smaxb, output, final_eept_predb = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, network_config=network_config)
                     else:
-                        output, final_eept_predb = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
+                        smaxb, output, final_eept_predb = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
                     local_outputbs.append(output)
+                    smaxbs.append(smaxb)
                     if FLAGS.learn_final_eept:
                         final_eept_lossb = euclidean_loss_layer(final_eept_predb, final_eeptb, multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                     else:
@@ -703,14 +728,14 @@ class MIL(object):
                     final_eept_lossesb.append(final_eept_lossb)
                     local_lossesb.append(lossb)
 
-                local_fn_output = [local_outputas, local_outputbs, local_outputbs[-1], local_lossesa, local_lossesb, final_eept_lossesb, flat_img_inputb, gradients_summ]
+                local_fn_output = [inputas, inputbs, local_outputas, local_outputbs, smaxas, smaxbs, local_outputbs[-1], local_lossesa, local_lossesb, final_eept_lossesb, flat_img_inputb, gradients_summ]
                 return local_fn_output
 
         if self.norm_type:
             # initialize batch norm vars.
             unused = batch_metalearn((inputa[0], inputb[0], actiona[0], actionb[0]))
 
-        out_dtype = [[tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [[tf.float32]*len(self.weights.keys())]*num_updates]
+        out_dtype = [[tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [[tf.float32]*len(self.weights.keys())]*num_updates]
         result = tf.map_fn(batch_metalearn, elems=(inputa, inputb, actiona, actionb), dtype=out_dtype)
         print('Done with map.')
         return result

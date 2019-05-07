@@ -222,7 +222,7 @@ class DataGenerator(object):
             img_hsv = tf.stack([img_h, img_s, img_v], 3)
             image_rgb = tf.image.hsv_to_rgb(img_hsv)
             image = image_rgb
-        image = tf.transpose(image, perm=[0, 3, 2, 1]) # transpose to mujoco setting for images
+        #image = tf.transpose(image, perm=[0, 3, 2, 1]) # transpose to mujoco setting for images
         image = tf.reshape(image, [self.T, -1])
         num_preprocess_threads = 1 # TODO - enable this to be set to >1
         min_queue_examples = 64 #128 #256

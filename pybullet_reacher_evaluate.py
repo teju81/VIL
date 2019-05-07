@@ -124,7 +124,7 @@ args = parser.parse_args()
 env = gym.make('PyBulletReacher-v0')
 
 gif_name = 'sample.gif'
-env.env.object_type = "cross"
+env.env.object_type = "circle"
 env.env.object_scale = 40
 env.env.color_list = get_reacher_task_color_info(task_color_index=1700)
 env.env.gif_height = 128
