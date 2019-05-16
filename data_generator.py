@@ -241,8 +241,110 @@ class DataGenerator(object):
             all_images.append(image)
         tf_all_images = tf.stack(all_images)
         return tf_all_images
-    
-    
+
+    # Finds and Stores the path for training and validation video demonstrations for each iteration
+    def generate_png_batches(self):
+        with Timer('Generating batches for each iteration'):
+            if FLAGS.training_set_size != -1:
+                offset = self.dataset_size - FLAGS.training_set_size - FLAGS.val_set_size
+            else:
+                offset = 0
+            img_folders = natsorted(glob.glob(self.demo_gif_dir + self.gif_prefix + '_*'))
+            #img_folders = img_folders[:100]
+            train_img_folders = {i: img_folders[i] for i in self.train_idx}
+            val_img_folders = {i: img_folders[i+offset] for i in self.val_idx}
+            TEST_PRINT_INTERVAL = FLAGS.test_print_interval
+            TOTAL_ITERS = FLAGS.metatrain_iterations
+            self.all_training_filenames = []
+            self.all_val_filenames = []
+            self.training_batch_idx = {i: OrderedDict() for i in range(TOTAL_ITERS)}
+            self.val_batch_idx = {i: OrderedDict() for i in TEST_PRINT_INTERVAL*np.arange(1, int(TOTAL_ITERS/TEST_PRINT_INTERVAL))}
+            for itr in range(TOTAL_ITERS):
+                sampled_train_idx = random.sample(self.train_idx.tolist(), self.meta_batch_size)
+                for idx in sampled_train_idx:
+                    sampled_folder = train_img_folders[idx]
+                    image_folder_paths = natsorted(glob.glob(sampled_folder + '/*'))
+                    if FLAGS.experiment == 'sim_push':
+                        image_folder_paths = image_folder_paths[6:-6]
+                    try:
+                        # Total number of examples per task must match for video and state
+                        assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
+                    except AssertionError:
+                        import pdb; pdb.set_trace()
+                    sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
+                    sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
+                    sampled_images = list(chain.from_iterable(sampled_images))
+                    if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
+                      print(sampled_folder)
+                      print(sampled_image_folder_idx)
+                      print(len(sampled_images))
+                      print(sampled_images)
+                    #assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                    self.all_training_filenames.extend(sampled_images)
+                    self.training_batch_idx[itr][idx] = sampled_image_folder_idx
+                if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
+                    sampled_val_idx = random.sample(self.val_idx.tolist(), self.meta_batch_size)
+                    for idx in sampled_val_idx:
+                        sampled_folder = val_img_folders[idx]
+                        image_folder_paths = natsorted(glob.glob(sampled_folder + '/*'))
+                        if FLAGS.experiment == 'sim_push':
+                            image_folder_paths = image_folder_paths[6:-6]
+                        assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
+                        sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
+                        sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
+                        sampled_images = list(chain.from_iterable(sampled_images))
+                        if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
+                          print(sampled_folder)
+                          print(sampled_image_folder_idx)
+                          print(len(sampled_images))
+                          print(sampled_images)
+                        #assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                        self.all_val_filenames.extend(sampled_images)
+                        self.val_batch_idx[itr][idx] = sampled_image_folder_idx
+
+    # Retrieves a batch of video demonstrations given the iteration
+    def make_png_batch_tensor(self, network_config, restore_iter=0, train=True):
+        TEST_PRINT_INTERVAL = FLAGS.test_print_interval
+        batch_image_size = (self.update_batch_size + self.test_batch_size) * self.T * self.meta_batch_size
+        if train:
+            all_filenames = self.all_training_filenames
+            if restore_iter > 0:
+                all_filenames = all_filenames[batch_image_size*(restore_iter+1):]
+        else:
+            all_filenames = self.all_val_filenames
+            if restore_iter > 0:
+                all_filenames = all_filenames[batch_image_size*(int(restore_iter/TEST_INTERVAL)+1):]
+        im_height = network_config['image_height']
+        im_width = network_config['image_width']
+        num_channels = network_config['image_channels']
+        # make queue for tensorflow to read from
+        filename_queue = tf.train.string_input_producer(tf.convert_to_tensor(all_filenames), shuffle=False)
+        image_reader = tf.WholeFileReader()
+        _, image_file = image_reader.read(filename_queue)
+        image = tf.image.decode_png(image_file)
+        # should be 1 x C x W x H
+        image.set_shape((im_height, im_width, num_channels))
+        image = tf.cast(image, tf.float32)
+        image /= 255.0
+        #image = tf.transpose(image, perm=[0, 3, 2, 1]) # transpose to mujoco setting for images
+        #image = tf.reshape(image, [self.T, -1])
+        num_preprocess_threads = 4 # TODO - enable this to be set to >1
+        min_queue_examples = 256 #128 #256
+        capacity = min_queue_examples + 3 * batch_image_size
+        images = tf.train.batch(
+                [image],
+                batch_size = batch_image_size,
+                num_threads=num_preprocess_threads,
+                capacity=capacity,
+                )
+        all_images = []
+        for i in range(self.meta_batch_size):
+            image = images[i*self.T*(self.update_batch_size+self.test_batch_size):(i+1)*self.T*(self.update_batch_size+self.test_batch_size)]
+            image = tf.reshape(image, [(self.update_batch_size+self.test_batch_size)*self.T, -1])
+            all_images.append(image)
+        tf_all_images = tf.stack(all_images)
+        return tf_all_images
+
     # Extract Batch of Robot actions and States corresponding to the Batch of Video demonstrations
     def generate_data_batch(self, itr, train=True):
         if train:

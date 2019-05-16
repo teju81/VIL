@@ -72,7 +72,7 @@ def extract_demo_dict(demo_file):
         for i in range(0, len(demo_file)):
             with Timer('Extracting demo file %d' % i):
                 demos[i] = DataLogger().unpickle(demo_file[i])
-                # Discard Joint velocities and end effector position and retain only joint pose
+                # Discard Joint torques, velocities and end effector position and retain only joint pose
                 demos[i]['demoX'] = demos[i]['demoX'][:,:,0:2]
                 demos[i]['demoU'] = demos[i]['demoU'][:,:,0:2]
     return demos
