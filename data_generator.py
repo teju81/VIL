@@ -18,6 +18,7 @@ from utils import extract_demo_dict, Timer
 from tensorflow.python.platform import flags
 from natsort import natsorted
 from random import shuffle
+from itertools import chain
 
 FLAGS = flags.FLAGS
 
