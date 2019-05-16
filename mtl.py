@@ -392,7 +392,7 @@ class MTL(object):
                 local_lossesa.append(local_lossa)
 
                 # Compute fast gradients
-                grads = tf.gradients(local_lossa, weights.values())
+                grads = tf.gradients(local_lossa, list(weights.values()))
                 gradients = dict(zip(weights.keys(), grads))
                                 
 #                 #compute hessian - for debug
@@ -444,7 +444,7 @@ class MTL(object):
                     local_lossesa.append(loss)
 
                     # Compute fast gradients
-                    grads = tf.gradients(loss, fast_weights.values())
+                    grads = tf.gradients(loss, list(fast_weights.values()))
                     gradients = dict(zip(fast_weights.keys(), grads))
 
 #                     # Hessian - for debug
