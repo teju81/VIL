@@ -66,6 +66,10 @@ class DataGenerator(object):
         N_demos = len(demos.keys())
         self.state_idx = range(demos[0]['demoX'].shape[-1])
         self._dU = demos[0]['demoU'].shape[-1]
+        im_height = FLAGS.im_height
+        im_width = FLAGS.im_width
+        num_channels = FLAGS.num_channels
+        self._dO = im_height*im_width*num_channels
         idx = np.arange(n_folders)
         if FLAGS.train:
             n_val = FLAGS.val_set_size # number of demos for testing
