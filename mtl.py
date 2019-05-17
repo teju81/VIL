@@ -1,4 +1,4 @@
-""" This file defines Meta Target Localization (MTL). """
+""" This file defines Meta Imitation Learning for Target Localization (MTL). """
 from __future__ import division
 
 import numpy as np
@@ -13,7 +13,7 @@ FLAGS = flags.FLAGS
 
 class MTL(object):
     """ Initialize MTL. Need to call init_network to contruct the architecture after init. """
-    def __init__(self, dO, dU, network_config=None):
+    def __init__(self, dU, dT, state_idx=None, img_idx=None, network_config=None):
         # MTL hyperparams
         self.num_updates = FLAGS.num_updates
         self.update_batch_size = FLAGS.update_batch_size
@@ -23,19 +23,23 @@ class MTL(object):
         self.T = FLAGS.T
         self.network_params = network_config
         self.norm_type = FLAGS.norm
+        # List of indices for state (vector) data and image (tensor) data in observation.
+        self.state_idx, self.img_idx = state_idx, img_idx
         # Dimension of input and output of the model
-        self._dO = dO
+        self._dO = len(img_idx) + len(state_idx)
         self._dU = dU
+        self._dT = dT
 
     def init_network(self, graph, input_tensors=None, restore_iter=0, prefix='Training_'):
         """ Helper method to initialize the tf networks used """
         with graph.as_default():
             with Timer('building TF network'):
-                result = self.construct_model(input_tensors=input_tensors, prefix=prefix, dim_input=self._dO, dim_output=self._dU,
+                result = self.construct_model(input_tensors=input_tensors, prefix=prefix, dim_input=self._dO, dim_output=self._dT,
                                           network_config=self.network_params)
-            inputas, inputbs, targetas, targetbs, outputas, outputbs, smaxas, smaxbs, test_output, lossesa, lossesb, flat_img_inputb, gradients_op = result
+            inputas, inputbs, outputas, outputbs, smaxas, smaxbs, test_output, lossesa, lossesb, flat_img_inputb, gradients_op = result
             if 'Testing' in prefix:
                 self.obs_tensor = self.obsa
+                self.state_tensor = self.statea
                 self.test_act_op = test_output
                 self.image_op = flat_img_inputb
 
@@ -44,27 +48,21 @@ class MTL(object):
             total_losses2 = [tf.reduce_sum(lossesb[j]) / tf.to_float(self.meta_batch_size) for j in range(self.num_updates)]
 
             if 'Training' in prefix:
-                self.inputas = inputas
-                self.inputbs = inputbs
-                self.outputas = outputas
-                self.outputbs = outputbs
-                self.targetas = targetas
-                self.targetbs = targetbs
-                self.smaxas = smaxas
-                self.smaxbs = smaxbs
                 self.total_losses1 = total_losses1
                 self.total_loss1 = total_losses1[0]
                 self.total_losses2 = total_losses2
+                self.outputas = outputas
+                self.outputbs = outputbs
+                self.smaxas = smaxas
+                self.smaxbs = smaxbs
             elif 'Validation' in prefix:
-                self.val_inputas = inputas
-                self.val_inputbs = inputbs
-                self.val_targetas = targetas
-                self.val_targetbs = targetbs                
-                self.val_smaxas = smaxas
-                self.val_smaxbs = smaxbs
                 self.val_total_losses1 = total_losses1
                 self.val_total_loss1 = total_losses1[0]
                 self.val_total_losses2 = total_losses2
+                self.val_outputas = outputas
+                self.val_outputbs = outputbs
+                self.val_smaxas = smaxas
+                self.val_smaxbs = smaxbs
 
             if 'Training' in prefix:
                 decay_steps = 50000
@@ -73,36 +71,26 @@ class MTL(object):
                 #lr_decayed = self.meta_lr
                 self.train_op = tf.train.AdamOptimizer(lr_decayed).minimize(self.total_losses2[self.num_updates - 1],global_step=self.global_step)
 
-#                 #Record Second order gradients for each update step
-#                 so_gradients_op = []
-#                 for j in range(self.num_updates):
-#                   grads = tf.gradients(self.total_losses2[j], self.weights.values())
-#                   gradients = dict(zip(self.weights.keys(), grads))
-#                   so_gradients_op.append([gradients[key] for key in self.sorted_weight_keys])
-
                 # Add summaries
                 summ = [tf.summary.scalar(prefix + 'Pre-update_loss', self.total_loss1)]
                 for k,v in self.weights.items():
                   summ.append(tf.summary.histogram('Weights_of_%s' % (k), v))
                 for j in range(self.num_updates):
-                  for task_id in range(smaxas[j].shape[0]):
-                    imga = inputas[j][task_id,:,:,:,:]
-                    imgb = inputbs[j][task_id,:,:,:,:]
-                    summ.append(tf.summary.image('Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 3))
-                    summ.append(tf.summary.image('Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 3))
-                    for filt_id in range(smaxas[j].shape[-1]):
-                      filta = smaxas[j][task_id,:,:,:,filt_id:filt_id+1]
-                      filtb = smaxbs[j][task_id,:,:,:,filt_id:filt_id+1]
-                      summ.append(tf.summary.image('Task_%d_Spatial_Softmax_A_%d_Step_%d' % (task_id,filt_id,j),filta, 1))
-                      summ.append(tf.summary.image('Task_%d_Spatial_Softmax_B_%d_Step_%d' % (task_id,filt_id,j),filtb, 1))
+                    for task_id in range(smaxas[j].shape[0]):
+                        imga = inputas[j][task_id,23:,:,:,:]
+                        imgb = inputbs[j][task_id,23:,:,:,:]
+                        summ.append(tf.summary.image('Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 1))
+                        summ.append(tf.summary.image('Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 1))
+                        for filt_id in range(smaxas[j].shape[-1]):
+                          filta = smaxas[j][task_id,:,:,:,filt_id:filt_id+1]
+                          filtb = smaxbs[j][task_id,:,:,:,filt_id:filt_id+1]
+                          summ.append(tf.summary.image('Task_%d_Spatial_Softmax_A_%d_Step_%d' % (task_id,filt_id,j),filta, 1))
+                          summ.append(tf.summary.image('Task_%d_Spatial_Softmax_B_%d_Step_%d' % (task_id,filt_id,j),filtb, 1))
+
                     summ.append(tf.summary.scalar(prefix + 'Post-update_loss_step_%d' % j, self.total_losses2[j]))
                     for k in range(len(self.sorted_weight_keys)):
                         summ.append(tf.summary.histogram('Gradient_of_%s_step_%d' % (self.sorted_weight_keys[k], j), gradients_op[j][k]))
-#                     for k in range(len(self.sorted_weight_keys)):
-#                         summ.append(tf.summary.histogram('Second_Order_Gradient_of_%s_step_%d' % (self.sorted_weight_keys[k], j), so_gradients_op[j][k]))
 
-                #summ.append(tf.summary.image("inner train image", self.inputas[0,0,:,:,0])
-                #summ.append(tf.summary.image("inner train activation", self.smaxas[0,0,:,:,0])
                 self.train_summ_op = tf.summary.merge(summ)
             elif 'Validation' in prefix:
                 # Add summaries
@@ -111,19 +99,21 @@ class MTL(object):
                     for task_id in range(smaxas[j].shape[0]):
                       imga = inputas[j][task_id,:,:,:]
                       imgb = inputbs[j][task_id,:,:,:]
-                      summ.append(tf.summary.image('Val_Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 3))
-                      summ.append(tf.summary.image('Val_Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 3))
+                      summ.append(tf.summary.image('Val_Task_%d_IMG_A_Step_%d' % (task_id,j),imga, 1))
+                      summ.append(tf.summary.image('Val_Task_%d_IMG_B_Step_%d' % (task_id,j),imgb, 1))
                       for filt_id in range(smaxas[j].shape[-1]):
                         filta = smaxas[j][task_id,:,:,:,filt_id:filt_id+1]
                         filtb = smaxbs[j][task_id,:,:,:,filt_id:filt_id+1]
                         summ.append(tf.summary.image('Val_Task_%d_Spatial_Softmax_A_%d_Step_%d' % (task_id,filt_id,j),filta, 1))
                         summ.append(tf.summary.image('Val_Task_%d_Spatial_Softmax_B_%d_Step_%d' % (task_id,filt_id,j),filtb, 1))
+
                     summ.append(tf.summary.scalar(prefix + 'Post-update_loss_step_%d' % j, self.val_total_losses2[j]))
                 self.val_summ_op = tf.summary.merge(summ)
 
-    def construct_image_input(self, nn_input, network_config=None):
+    def construct_image_input(self, nn_input, state_idx, img_idx, network_config=None):
         """ Preprocess images. """
-        flat_image_input = nn_input
+        state_input = nn_input[:, 0:state_idx[-1]+1]
+        flat_image_input = nn_input[:, state_idx[-1]+1:img_idx[-1]+1]
 
         # image goes through 3 convnet layers
         num_filters = network_config['num_filters']
@@ -131,15 +121,15 @@ class MTL(object):
         im_height = network_config['image_height']
         im_width = network_config['image_width']
         num_channels = network_config['image_channels']
-        image_input = tf.reshape(flat_image_input, [-1, im_width, im_height, num_channels])
-        #image_input = tf.transpose(image_input, perm=[0,3,2,1])
+        image_input = tf.reshape(flat_image_input, [-1, im_width, im_height, num_channels]) # For mujoco swap 1 and 3 dimensions in reshape
+        #image_input = tf.transpose(image_input, perm=[0,3,2,1]) # Mujoco
         if FLAGS.pretrain_weight_path != 'N/A':
             image_input = image_input * 255.0 - tf.convert_to_tensor(np.array([103.939, 116.779, 123.68], np.float32))
             # 'RGB'->'BGR'
             image_input = image_input[:, :, :, ::-1]
-        return image_input, flat_image_input
+        return image_input, flat_image_input, state_input
 
-    def construct_weights(self, network_config=None):
+    def construct_weights(self, dim_input, dim_output, network_config=None):
         """ Construct weights for the network. """
         weights = {}
         num_filters = network_config['num_filters']
@@ -202,17 +192,22 @@ class MTL(object):
 
         # fc weights
         in_shape = self.conv_out_size
-        fc_weights = {}
-        if self.norm_type == 'selu':
-            fc_weights['wfc'] = init_fc_weights_snn([in_shape, 2], name='wfc')
-        else:
-            fc_weights['wfc'] = init_weights([in_shape, 2], name='wfc')
-        fc_weights['bfc'] = init_bias([2], name='bfc')
+        if not FLAGS.no_state:
+            in_shape += len(self.state_idx)
+        if FLAGS.fc_bt:
+            in_shape += FLAGS.bt_dim
+        if FLAGS.fc_bt:
+            weights['context'] = safe_get('context', initializer=tf.zeros([FLAGS.bt_dim], dtype=tf.float32))
+        self.conv_out_size_final = in_shape
 
-        weights.update(fc_weights)
+        if self.norm_type == 'selu':
+            weights['w_fc'] = init_fc_weights_snn([in_shape, dim_output], name='w_fc')
+        else:
+            weights['w_fc'] = init_weights([in_shape, dim_output], name='w_fc')
+        weights['b_fc'] = init_bias([dim_output], name='b_fc')
 
         return weights
-
+      
     def construct_lr_weights(self, weight_keys, inner_lr, num_updates):
         lr_weight_dict = {}
         for key in weight_keys:
@@ -224,15 +219,16 @@ class MTL(object):
           
         return lr_weight_dict
 
-    def forward(self, image_input, weights, meta_testing=False, is_training=True, testing=False, network_config=None):
+    def forward(self, image_input, state_input, weights, meta_testing=False, is_training=True, testing=False, network_config=None):
         """ Perform the forward pass. """
         if FLAGS.fc_bt:
             im_height = network_config['image_height']
             im_width = network_config['image_width']
             num_channels = network_config['image_channels']
             flatten_image = tf.reshape(image_input, [-1, im_height*im_width*num_channels])
+            context = tf.transpose(tf.gather(tf.transpose(tf.zeros_like(flatten_image)), list(range(FLAGS.bt_dim))))
+            context += weights['context']
         norm_type = self.norm_type
-        use_selu = self.norm_type == 'selu'
         decay = network_config.get('decay', 0.9)
         strides = network_config.get('strides', [[1, 2, 2, 1], [1, 2, 2, 1], [1, 2, 2, 1]])
         downsample_factor = strides[0][1]
@@ -255,8 +251,9 @@ class MTL(object):
                                 norm_type=norm_type, decay=decay, id=i, is_training=is_training, activation_fn=self.activation_fn)
             else:
                 conv_layer = dropout(norm(conv2d(img=conv_layer, w=weights['wc%d' % (i+1)], b=weights['bc%d' % (i+1)], strides=strides[i], is_dilated=is_dilated), \
-                                norm_type=norm_type, decay=decay, id=i, is_training=is_training, activation_fn=self.activation_fn), keep_prob=prob, is_training=is_training, name='dropout_%d' % (i+1))        
-        
+                                norm_type=norm_type, decay=decay, id=i, is_training=is_training, activation_fn=self.activation_fn), keep_prob=prob, is_training=is_training, name='dropout_%d' % (i+1))
+
+        #self.sp_smax_in = conv_layer3
         if FLAGS.fp:
             _, num_rows, num_cols, num_fp = conv_layer.get_shape()
             if is_dilated:
@@ -281,8 +278,7 @@ class MTL(object):
             x_map = tf.reshape(x_map, [num_rows * num_cols])
             y_map = tf.reshape(y_map, [num_rows * num_cols])
 
-            # transpose op: rearrange features to be [batch_size, num_fp, num_rows, num_cols]
-            # Reshape op: reshape to [batchsize*num_fp,num_rows*num_cols]
+            # rearrange features to be [batch_size, num_fp, num_rows, num_cols]
             features = tf.reshape(tf.transpose(conv_layer, [0,3,1,2]),
                                   [-1, num_rows*num_cols])
             softmax = tf.nn.softmax(features)
@@ -293,18 +289,28 @@ class MTL(object):
             conv_out_flat = tf.reshape(tf.concat(axis=1, values=[fp_x, fp_y]), [-1, num_fp*2])
         else:
             conv_out_flat = tf.reshape(conv_layer, [-1, self.conv_out_size])
+        fc_input = conv_out_flat #tf.add(conv_out_flat, 0)
 
-        smax = tf.nn.softmax(conv_layer)
-        fc_input = tf.add(conv_out_flat, 0)
-        fc_output = tf.nn.sigmoid(tf.matmul(fc_input, weights['wfc']) + weights['bfc'])
-        
+        smax = tf.nn.softmax(conv_layer) # Return activations for debugging
+
+        if FLAGS.fc_bt:
+            fc_input = tf.concat(axis=1, values=[fc_input, context])
+        #Fully connected layers
+        fc_output = fc_input #tf.add(fc_input, 0)
+        if state_input is not None:
+            fc_output = tf.concat(axis=1, values=[fc_output, state_input])
+        fc_output = tf.matmul(fc_output, weights['w_fc']) + weights['b_fc']
+
+        #Sigmoid to keep output between 0 - 1
+        fc_output = tf.nn.sigmoid(fc_output)
+
         return smax, fc_output
 
     def construct_model(self, input_tensors=None, prefix='Training_', dim_input=27, dim_output=2, network_config=None):
         """
         Construct the meta-learning graph.
         Args:
-            input_tensors: tensors of input videos, if available
+            input_tensors: tensors of input videos
             prefix: indicate whether we are building training, validation or testing graph.
             dim_input: Dimensionality of input.
             dim_output: Dimensionality of the output.
@@ -318,25 +324,30 @@ class MTL(object):
         else:
             self.obsa = obsa = input_tensors['inputa'] # meta_batch_size x update_batch_size x dim_input
             self.obsb = obsb = input_tensors['inputb']
-            print('construct model')
-            print(self.obsa)
-            print(self.obsb)
 
-        if not hasattr(self, 'targeta'):
+        if not hasattr(self, 'statea'):
+            self.statea = statea = tf.placeholder(tf.float32, name='statea')
+            self.stateb = stateb = tf.placeholder(tf.float32, name='stateb')
+            self.actiona = actiona = tf.placeholder(tf.float32, name='actiona')
+            self.actionb = actionb = tf.placeholder(tf.float32, name='actionb')
             self.targeta = targeta = tf.placeholder(tf.float32, name='targeta')
             self.targetb = targetb = tf.placeholder(tf.float32, name='targetb')
         else:
+            statea = self.statea
+            stateb = self.stateb
+            actiona = self.actiona
+            actionb = self.actionb
             targeta = self.targeta
             targetb = self.targetb
 
-        inputa = obsa
-        inputb = obsb
+        inputa = tf.concat(axis=2, values=[statea, obsa])
+        inputb = tf.concat(axis=2, values=[stateb, obsb])
 
         with tf.variable_scope('model', reuse=None) as training_scope:
             self.global_step = tf.Variable(0,trainable=False,name='global_step')
             # Construct layers weight & bias
             if 'weights' not in dir(self):
-                self.weights = weights = self.construct_weights(network_config=network_config)
+                self.weights = weights = self.construct_weights(dim_input, dim_output, network_config=network_config)
                 self.sorted_weight_keys = natsorted(self.weights.keys())
                 #Learn the inner learning rates
                 self.lr_weights = lr_weights = self.construct_lr_weights(self.sorted_weight_keys, FLAGS.train_update_lr, FLAGS.num_updates)
@@ -362,12 +373,7 @@ class MTL(object):
                 targeta = tf.reshape(targeta, [-1, dim_output])
                 targetb = tf.reshape(targetb, [-1, dim_output])
                 gradients_summ = []
-                hess_summ = []
                 testing = 'Testing' in prefix
-
-                # No access to actions in two headed architecture
-                if FLAGS.no_target:
-                    targeta = tf.zeros_like(targeta)
 
                 local_outputas, local_lossesa, local_outputbs, local_lossesb = [], [], [], []
                 smaxas, smaxbs = [], []
@@ -376,28 +382,35 @@ class MTL(object):
                 targetbs = [targetb]*num_updates
 
                 # Convert to image dims
-                inputa, _ = self.construct_image_input(inputa, network_config=network_config)
-                inputb, flat_img_inputb = self.construct_image_input(inputb, network_config=network_config)
+                inputa, _, state_inputa = self.construct_image_input(inputa, self.state_idx, self.img_idx, network_config=network_config)
+                inputb, flat_img_inputb, state_inputb = self.construct_image_input(inputb, self.state_idx, self.img_idx, network_config=network_config)
                 inputas = [inputa]*num_updates
                 inputbs = [inputb]*num_updates
+                if FLAGS.zero_state:
+                    state_inputa = tf.zeros_like(state_inputa)
+                state_inputas = [state_inputa]*num_updates
+                if FLAGS.no_state:
+                    state_inputa = None
 
                 # Pre-update
                 if 'Training' in prefix:
-                    smaxa, local_outputa = self.forward(inputa, weights, network_config=network_config)
+                    smaxa, local_outputa = self.forward(inputa, state_inputa, weights, network_config=network_config)
                 else:
-                    smaxa, local_outputa = self.forward(inputa, weights, is_training=False, network_config=network_config)
+                    smaxa, local_outputa = self.forward(inputa, state_inputa, weights, is_training=False, network_config=network_config)
                 local_outputas.append(local_outputa)
                 smaxas.append(smaxa)
+
                 local_lossa = euclidean_loss_layer(local_outputa, targeta, multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                 local_lossesa.append(local_lossa)
 
                 # Compute fast gradients
+                #gradients = {}
+                #for k,v in weights.items():
+                    #gradients[k] = tf.gradients(local_lossa, v)
+
+                # Compute fast gradients
                 grads = tf.gradients(local_lossa, list(weights.values()))
                 gradients = dict(zip(weights.keys(), grads))
-                                
-#                 #compute hessian - for debug
-#                 hess = [tf.gradients(gradients[key], weights[key]) for key in weights.keys()]
-#                 hess_dict = dict(zip(weights.keys(),hess))
                 
                 # make fast gradient zero for weights with gradient None
                 for key in gradients.keys():
@@ -414,7 +427,6 @@ class MTL(object):
                     gradients['wc1'] = tf.zeros_like(gradients['wc1'])
                     gradients['bc1'] = tf.zeros_like(gradients['bc1'])
                 gradients_summ.append([gradients[key] for key in self.sorted_weight_keys])
-                #hess_summ.append([hess_dict[key] for key in self.sorted_weight_keys])
                 
                 fast_weights = {}
                 for key in weights.keys():
@@ -423,10 +435,12 @@ class MTL(object):
                   fast_weights[key] = weights[key] - self.step_size*gradients[key]
 
                 # Post-update
+                if FLAGS.no_state:
+                    state_inputb = None
                 if 'Training' in prefix:
-                    smaxb, outputb = self.forward(inputb, fast_weights, meta_testing=True, network_config=network_config)
+                    smaxb, outputb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, network_config=network_config)
                 else:
-                    smaxb, outputb = self.forward(inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
+                    smaxb, outputb = self.forward(inputb, state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
                 local_outputbs.append(outputb)
                 smaxbs.append(smaxb)
                 local_lossb = euclidean_loss_layer(outputb, targetb, multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
@@ -434,22 +448,26 @@ class MTL(object):
 
                 for j in range(num_updates - 1):
                     # Pre-update
+                    state_inputa_new = state_inputas[j+1]
+                    if FLAGS.no_state:
+                        state_inputa_new = None
                     if 'Training' in prefix:
-                        smaxa, outputa = self.forward(inputas[j+1], fast_weights, network_config=network_config)
+                        smaxa, outputa = self.forward(inputas[j+1], state_inputa_new, fast_weights, network_config=network_config)
                     else:
-                        smaxa, outputa = self.forward(inputas[j+1], fast_weights, is_training=False, testing=testing, network_config=network_config)
-                    local_outputas.append(outputa)  
+                        smaxa, outputa = self.forward(inputas[j+1], state_inputa_new, fast_weights, is_training=False, testing=testing, network_config=network_config)
+                    local_outputas.append(outputa)
                     smaxas.append(smaxa)
                     loss = euclidean_loss_layer(outputa, targetas[j+1], multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                     local_lossesa.append(loss)
 
                     # Compute fast gradients
-                    grads = tf.gradients(loss, list(fast_weights.values()))
-                    gradients = dict(zip(fast_weights.keys(), grads))
+                    #gradients = {}
+                    #for k,v in fast_weights.items():
+                        #gradients[k] = tf.gradients(local_lossa, v)
 
-#                     # Hessian - for debug
-#                     hess = [tf.gradients(gradients[key], fast_weights[key]) for key in fast_weights.keys()]
-#                     hess_dict = dict(zip(fast_weights.keys(),hess))
+                    # Compute fast gradients
+                    grads = tf.gradients(local_lossa, list(weights.values()))
+                    gradients = dict(zip(weights.keys(), grads))
 
                     # make fast gradient zero for weights with gradient None
                     for key in gradients.keys():
@@ -466,7 +484,6 @@ class MTL(object):
                         gradients['wc1'] = tf.zeros_like(gradients['wc1'])
                         gradients['bc1'] = tf.zeros_like(gradients['bc1'])
                     gradients_summ.append([gradients[key] for key in self.sorted_weight_keys])
-                    #hess_summ.append([hess_dict[key] for key in self.sorted_weight_keys])
                     
                     for key in fast_weights.keys():
                       self.step_size = lr_weights['lr_' + key + 'update%d'%(j+1)]
@@ -476,23 +493,25 @@ class MTL(object):
                     #fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.step_size*gradients[key] for key in fast_weights.keys()]))
 
                     # Post-update
+                    if FLAGS.no_state:
+                        state_inputb = None
                     if 'Training' in prefix:
-                        smaxb, output = self.forward(inputbs[j+1], fast_weights, meta_testing=True, network_config=network_config)
+                        smaxb, output = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, network_config=network_config)
                     else:
-                        smaxb, output = self.forward(inputbs[j+1], fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
+                        smaxb, output = self.forward(inputbs[j+1], state_inputb, fast_weights, meta_testing=True, is_training=False, testing=testing, network_config=network_config)
                     local_outputbs.append(output)
                     smaxbs.append(smaxb)
                     lossb = euclidean_loss_layer(output, targetbs[j+1], multiplier=loss_multiplier, use_l1=FLAGS.use_l1_l2_loss)
                     local_lossesb.append(lossb)
 
-                local_fn_output = [inputas, inputbs, targetas, targetbs, local_outputas, local_outputbs, smaxas, smaxbs, local_outputbs[-1], local_lossesa, local_lossesb, flat_img_inputb, gradients_summ]
+                local_fn_output = [inputas, inputbs, local_outputas, local_outputbs, smaxas, smaxbs, local_outputbs[-1], local_lossesa, local_lossesb, flat_img_inputb, gradients_summ]
                 return local_fn_output
 
         if self.norm_type:
             # initialize batch norm vars.
             unused = batch_metalearn((inputa[0], inputb[0], targeta[0], targetb[0]))
 
-        out_dtype = [[tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [[tf.float32]*len(self.weights.keys())]*num_updates]
+        out_dtype = [[tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [tf.float32]*num_updates, [tf.float32]*num_updates, tf.float32, [[tf.float32]*len(self.weights.keys())]*num_updates]
         result = tf.map_fn(batch_metalearn, elems=(inputa, inputb, targeta, targetb), dtype=out_dtype)
         print('Done with map.')
         return result

@@ -5,6 +5,7 @@ import logging
 import gym
 from data_generator import DataGenerator
 from mil import MIL
+from mtl import MTL
 from tensorflow.python.platform import flags
 
 FLAGS = flags.FLAGS
@@ -35,7 +36,7 @@ flags.DEFINE_integer('val_set_size', 50, 'size of the training set, 150 for visi
 ## Training options
 flags.DEFINE_integer('metatrain_iterations', 50000, 'number of metatraining iterations.') # 50k for reaching
 flags.DEFINE_integer('meta_batch_size', 5, 'number of tasks sampled per meta-update') # 5 for reaching
-flags.DEFINE_float('meta_lr', 0.001, 'the base learning rate of the generator') # Beta
+flags.DEFINE_float('meta_lr', 0.01, 'the base learning rate of the generator') # Beta
 flags.DEFINE_integer('update_batch_size', 1, 'number of examples used for inner gradient update (K for K-shot learning).')
 flags.DEFINE_float('train_update_lr', 0.01, 'step size alpha for inner gradient update.') # Alpha: 0.001 for reaching
 flags.DEFINE_integer('num_updates', 1, 'number of inner gradient updates during training.') # 5 for placing
@@ -58,7 +59,7 @@ flags.DEFINE_integer('final_eept_max', 8, 'last index of the final eept in the a
 flags.DEFINE_float('final_eept_loss_eps', 0.1, 'the coefficient of the auxiliary loss')
 flags.DEFINE_float('act_loss_eps', 1.0, 'the coefficient of the action loss')
 flags.DEFINE_float('loss_multiplier', 1.0, 'the constant multiplied with the loss value, 100 for reach and 50 for push')
-flags.DEFINE_bool('use_l1_l2_loss', False, 'use a loss with combination of l1 and l2')
+flags.DEFINE_bool('use_l1_l2_loss', True, 'use a loss with combination of l1 and l2')
 flags.DEFINE_float('l2_eps', 0.01, 'coeffcient of l2 loss')
 flags.DEFINE_bool('shuffle_val', False, 'whether to choose the validation set via shuffling or not')
 
@@ -88,14 +89,14 @@ flags.DEFINE_bool('max_pool', False, 'Whether or not to use max pooling rather t
 flags.DEFINE_bool('stop_grad', False, 'if True, do not use second derivatives in meta-optimization (for speed)')
 
 ## Logging, saving, and testing options
-flags.DEFINE_integer('print_interval', 50, 'interval between 2 prints')
-flags.DEFINE_integer('test_print_interval', 100, 'interval between 2 test prints')
-flags.DEFINE_integer('summary_interval', 50, 'interval between 2 summaries')
-flags.DEFINE_integer('save_interval', 500, 'interval between 2 saves')
+flags.DEFINE_integer('print_interval', 5, 'interval between 2 prints')
+flags.DEFINE_integer('test_print_interval', 10, 'interval between 2 test prints')
+flags.DEFINE_integer('summary_interval', 5, 'interval between 2 summaries')
+flags.DEFINE_integer('save_interval', 50, 'interval between 2 saves')
 
 flags.DEFINE_bool('log', True, 'if false, do not log summaries, for debugging code.')
 flags.DEFINE_string('log_dir', 'logs/visionreach', 'directory for summaries and checkpoints.')
-flags.DEFINE_bool('resume', True, 'resume training if there is a model available')
+flags.DEFINE_bool('resume', False, 'resume training if there is a model available')
 flags.DEFINE_bool('train', True, 'True to train, False to test.')
 flags.DEFINE_integer('restore_iter', -1, 'iteration to load model (-1 for latest model)')
 flags.DEFINE_integer('train_update_batch_size', -1, 'number of examples used for gradient update during training \
@@ -123,18 +124,23 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
     else:
         training_range = range(restore_itr+1, TOTAL_ITERS)
     for itr in training_range:
-        state, tgt_mu = data_generator.generate_data_batch(itr)
+        state, action, target = data_generator.generate_data_batch(itr)
         statea = state[:, :FLAGS.update_batch_size*FLAGS.T, :]
         stateb = state[:, FLAGS.update_batch_size*FLAGS.T:, :]
-        actiona = tgt_mu[:, :FLAGS.update_batch_size*FLAGS.T, :]
-        actionb = tgt_mu[:, FLAGS.update_batch_size*FLAGS.T:, :]
+        actiona = action[:, :FLAGS.update_batch_size*FLAGS.T, :]
+        actionb = action[:, FLAGS.update_batch_size*FLAGS.T:, :]
+        targeta = target[:, :FLAGS.update_batch_size*FLAGS.T, :]
+        targetb = target[:, FLAGS.update_batch_size*FLAGS.T:, :]
+
         feed_dict = {model.statea: statea,
                     model.stateb: stateb,
-                    model.actiona: actiona,
-                    model.actionb: actionb}
+                    model.targeta: targeta,
+                    model.targetb: targetb,
+                    model.actiona:actiona,
+                    model.actionb:actionb}
         input_tensors = [model.train_op]
         if itr % SUMMARY_INTERVAL == 0 or itr % PRINT_INTERVAL == 0:
-            input_tensors.extend([model.train_summ_op, model.total_loss1, model.total_losses1[model.num_updates-1], model.total_losses2[model.num_updates-1]])
+            input_tensors.extend([model.lr_weights, model.outputas, model.outputbs, model.train_summ_op, model.total_loss1, model.total_losses1[model.num_updates-1], model.total_losses2[model.num_updates-1]])
         with graph.as_default():
             results = sess.run(input_tensors, feed_dict=feed_dict)
         if itr != 0 and itr % SUMMARY_INTERVAL == 0:
@@ -146,21 +152,33 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
         if itr != 0 and itr % PRINT_INTERVAL == 0:
             print('Iteration %d: average preloss1 is %.2f, average postloss1 is %.2f, average postloss2 is %.2f' % (itr, np.mean(prelosses1), np.mean(postlosses1), np.mean(postlosses2)))
             print('learning rates')
-            print(sess.run(model.lr_weights))
+            print(results[1])
+            print('target A')
+            print(targeta[0,:24,:])
+            print('output A')
+            print(results[2][-1][0,:24,:])
+            print('target B')
+            print(targetb[0,:24,:])
+            print('output B')
+            print(results[3][-1][0,:24,:])
             prelosses1, postlosses1, postlosses2 = [], [], []
 
         if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
             if FLAGS.val_set_size > 0:
                 input_tensors = [model.val_summ_op, model.val_total_loss1, model.val_total_losses1[model.num_updates-1], model.val_total_losses2[model.num_updates-1]]
-                val_state, val_act = data_generator.generate_data_batch(itr, train=False)
+                val_state, val_act, val_tgt = data_generator.generate_data_batch(itr, train=False)
                 statea = val_state[:, :FLAGS.update_batch_size*FLAGS.T, :]
                 stateb = val_state[:, FLAGS.update_batch_size*FLAGS.T:, :]
                 actiona = val_act[:, :FLAGS.update_batch_size*FLAGS.T, :]
                 actionb = val_act[:, FLAGS.update_batch_size*FLAGS.T:, :]
+                targeta = val_tgt[:, :FLAGS.update_batch_size*FLAGS.T, :]
+                targetb = val_tgt[:, FLAGS.update_batch_size*FLAGS.T:, :]
                 feed_dict = {model.statea: statea,
                             model.stateb: stateb,
-                            model.actiona: actiona,
-                            model.actionb: actionb}
+                            model.targeta: targeta,
+                            model.targetb: targetb,
+                            model.actiona:actiona,
+                            model.actionb:actionb}
                 with graph.as_default():
                     results = sess.run(input_tensors, feed_dict=feed_dict)
                 train_writer.add_summary(results[0], itr)
@@ -201,7 +219,7 @@ def main():
     state_idx = data_generator.state_idx
     img_idx = range(len(state_idx), len(state_idx)+FLAGS.im_height*FLAGS.im_width*FLAGS.num_channels)
     # need to compute x_idx and img_idx from data_generator
-    model = MIL(data_generator._dU, state_idx=state_idx, img_idx=img_idx, network_config=network_config)
+    model = MTL(data_generator._dU, data_generator._dT, state_idx=state_idx, img_idx=img_idx, network_config=network_config)
     # TODO: figure out how to save summaries and checkpoints
     exp_string = FLAGS.experiment+ '.' + FLAGS.init + '_init.' + str(FLAGS.num_conv_layers) + '_conv' + '.' + str(FLAGS.num_strides) + '_strides' + '.' + str(FLAGS.num_filters) + '_filters' + \
                 '.' + str(FLAGS.num_fc_layers) + '_fc' + '.' + str(FLAGS.layer_size) + '_dim' + '.bt_dim_' + str(FLAGS.bt_dim) + '.mbs_'+str(FLAGS.meta_batch_size) + \
@@ -237,13 +255,13 @@ def main():
 
     # put here for now
     if FLAGS.train:
-        data_generator.generate_batches(noisy=FLAGS.use_noisy_demos)
+        data_generator.generate_png_batches()
         with graph.as_default():
-            train_image_tensors = data_generator.make_batch_tensor(network_config, restore_iter=FLAGS.restore_iter)
+            train_image_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter)
             inputa = train_image_tensors[:, :FLAGS.update_batch_size*FLAGS.T, :]
             inputb = train_image_tensors[:, FLAGS.update_batch_size*FLAGS.T:, :]
             train_input_tensors = {'inputa': inputa, 'inputb': inputb}
-            val_image_tensors = data_generator.make_batch_tensor(network_config, restore_iter=FLAGS.restore_iter, train=False)
+            val_image_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter, train=False)
             inputa = val_image_tensors[:, :FLAGS.update_batch_size*FLAGS.T, :]
             inputb = val_image_tensors[:, FLAGS.update_batch_size*FLAGS.T:, :]
             val_input_tensors = {'inputa': inputa, 'inputb': inputb}

@@ -67,6 +67,7 @@ class DataGenerator(object):
         N_demos = len(demos.keys())
         self.state_idx = range(demos[0]['demoX'].shape[-1])
         self._dU = demos[0]['demoU'].shape[-1]
+        self._dT = demos[0]['target'].shape[-1]
         im_height = FLAGS.im_height
         im_width = FLAGS.im_width
         num_channels = FLAGS.num_channels
@@ -265,36 +266,18 @@ class DataGenerator(object):
             self.training_batch_idx = {i: OrderedDict() for i in range(TOTAL_ITERS)}
             self.val_batch_idx = {i: OrderedDict() for i in TEST_PRINT_INTERVAL*np.arange(1, int(TOTAL_ITERS/TEST_PRINT_INTERVAL))}
             for itr in range(TOTAL_ITERS):
-                sampled_train_idx = random.sample(self.train_idx.tolist(), self.meta_batch_size)
-                for idx in sampled_train_idx:
-                    sampled_folder = train_img_folders[idx]
-                    image_folder_paths = natsorted(glob.glob(sampled_folder + '/*'))
-                    if FLAGS.experiment == 'sim_push':
-                        image_folder_paths = image_folder_paths[6:-6]
-                    try:
-                        # Total number of examples per task must match for video and state
-                        assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
-                    except AssertionError:
-                        import pdb; pdb.set_trace()
-                    sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
-                    sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
-                    sampled_images = list(chain.from_iterable(sampled_images))
-                    if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
-                      print(sampled_folder)
-                      print(sampled_image_folder_idx)
-                      print(len(sampled_images))
-                      print(sampled_images)
-                    #assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
-                    self.all_training_filenames.extend(sampled_images)
-                    self.training_batch_idx[itr][idx] = sampled_image_folder_idx
-                if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
-                    sampled_val_idx = random.sample(self.val_idx.tolist(), self.meta_batch_size)
-                    for idx in sampled_val_idx:
-                        sampled_folder = val_img_folders[idx]
+                with Timer('Generating batches for iteration %d'%(itr)):
+                    sampled_train_idx = random.sample(self.train_idx.tolist(), self.meta_batch_size)
+                    for idx in sampled_train_idx:
+                        sampled_folder = train_img_folders[idx]
                         image_folder_paths = natsorted(glob.glob(sampled_folder + '/*'))
                         if FLAGS.experiment == 'sim_push':
                             image_folder_paths = image_folder_paths[6:-6]
-                        assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
+                        try:
+                            # Total number of examples per task must match for video and state
+                            assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
+                        except AssertionError:
+                            import pdb; pdb.set_trace()
                         sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
                         sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
                         sampled_images = list(chain.from_iterable(sampled_images))
@@ -303,9 +286,28 @@ class DataGenerator(object):
                           print(sampled_image_folder_idx)
                           print(len(sampled_images))
                           print(sampled_images)
-                        #assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
-                        self.all_val_filenames.extend(sampled_images)
-                        self.val_batch_idx[itr][idx] = sampled_image_folder_idx
+                        assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                        self.all_training_filenames.extend(sampled_images)
+                        self.training_batch_idx[itr][idx] = sampled_image_folder_idx
+                    if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
+                        sampled_val_idx = random.sample(self.val_idx.tolist(), self.meta_batch_size)
+                        for idx in sampled_val_idx:
+                            sampled_folder = val_img_folders[idx]
+                            image_folder_paths = natsorted(glob.glob(sampled_folder + '/*'))
+                            if FLAGS.experiment == 'sim_push':
+                                image_folder_paths = image_folder_paths[6:-6]
+                            assert len(image_folder_paths) == self.demos[idx]['demoX'].shape[0]
+                            sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
+                            sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
+                            sampled_images = list(chain.from_iterable(sampled_images))
+                            if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
+                              print(sampled_folder)
+                              print(sampled_image_folder_idx)
+                              print(len(sampled_images))
+                              print(sampled_images)
+                            assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                            self.all_val_filenames.extend(sampled_images)
+                            self.val_batch_idx[itr][idx] = sampled_image_folder_idx
 
     # Retrieves a batch of video demonstrations given the iteration
     def make_png_batch_tensor(self, network_config, restore_iter=0, train=True):
@@ -333,8 +335,8 @@ class DataGenerator(object):
         image /= 255.0
         #image = tf.transpose(image, perm=[0, 3, 2, 1]) # transpose to mujoco setting for images
         #image = tf.reshape(image, [self.T, -1])
-        num_preprocess_threads = 4 # TODO - enable this to be set to >1
-        min_queue_examples = 256 #128 #256
+        num_preprocess_threads = 1 # TODO - enable this to be set to >1
+        min_queue_examples = 64 #128 #256
         capacity = min_queue_examples + 3 * batch_image_size
         images = tf.train.batch(
                 [image],
@@ -372,16 +374,50 @@ class DataGenerator(object):
             U = np.array(U)
             X = [demos[k]['demoX'][v].reshape((test_batch_size+update_batch_size)*self.T, -1) for k, v in idxes.items()]
             X = np.array(X)
+            T = [demos[k]['target'][v].reshape((test_batch_size+update_batch_size)*self.T, -1) for k, v in idxes.items()]
+            T = np.array(T)
         else:
             noisy_U = [noisy_demos[k]['demoU'][v].reshape(update_batch_size*self.T, -1) for k, v in noisy_idxes.items()]
             noisy_X = [noisy_demos[k]['demoX'][v].reshape(update_batch_size*self.T, -1) for k, v in noisy_idxes.items()]
+            noisy_T = [noisy_demos[k]['target'][v].reshape(update_batch_size*self.T, -1) for k, v in noisy_idxes.items()]
             U = [demos[k]['demoU'][v].reshape(test_batch_size*self.T, -1) for k, v in idxes.items()]
             U = np.concatenate((np.array(noisy_U), np.array(U)), axis=1)
             X = [demos[k]['demoX'][v].reshape(test_batch_size*self.T, -1) for k, v in idxes.items()]
             X = np.concatenate((np.array(noisy_X), np.array(X)), axis=1)
+            T = [demos[k]['target'][v].reshape(test_batch_size*self.T, -1) for k, v in idxes.items()]
+            T = np.concatenate((np.array(noisy_T), np.array(T)), axis=1)
         assert U.shape[2] == self._dU
+        assert T.shape[2] == self._dT
         assert X.shape[2] == len(self.state_idx)
-        return X, U
+        return X, U, T
+
+    # Extract Batch of targets corresponding to the Batch of Video demonstrations
+    def generate_vision_only_data_batch(self, itr, train=True):
+        if train:
+            demos = {key: self.demos[key].copy() for key in self.train_idx}
+            idxes = self.training_batch_idx[itr]
+            if FLAGS.use_noisy_demos:
+                noisy_demos = {key: self.noisy_demos[key].copy() for key in self.train_idx}
+                noisy_idxes = self.noisy_training_batch_idx[itr]
+        else:
+            demos = {key: self.demos[key].copy() for key in self.val_idx}
+            idxes = self.val_batch_idx[itr]
+            if FLAGS.use_noisy_demos:
+                noisy_demos = {key: self.noisy_demos[key].copy() for key in self.val_idx}
+                noisy_idxes = self.noisy_val_batch_idx[itr]
+        batch_size = self.meta_batch_size
+        update_batch_size = self.update_batch_size
+        test_batch_size = self.test_batch_size
+        if not FLAGS.use_noisy_demos:
+            T = [demos[k]['target'][v].reshape((test_batch_size+update_batch_size)*self.T, -1) for k, v in idxes.items()]
+            T = np.array(T)
+        else:
+            noisy_T = [noisy_demos[k]['target'][v].reshape(update_batch_size*self.T, -1) for k, v in noisy_idxes.items()]
+            T = [demos[k]['target'][v].reshape(test_batch_size*self.T, -1) for k, v in idxes.items()]
+            T = np.concatenate((np.array(noisy_T), np.array(T)), axis=1)
+        assert T.shape[2] == self._dT
+        return T
+
     def generate_test_demos(self):
         if not FLAGS.use_noisy_demos:
             n_folders = len(self.demos.keys())

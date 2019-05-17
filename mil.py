@@ -13,7 +13,7 @@ FLAGS = flags.FLAGS
 
 class MIL(object):
     """ Initialize MIL. Need to call init_network to contruct the architecture after init. """
-    def __init__(self, dU, state_idx=None, img_idx=None, network_config=None):
+    def __init__(self, dU, dT, state_idx=None, img_idx=None, network_config=None):
         # MIL hyperparams
         self.num_updates = FLAGS.num_updates
         self.update_batch_size = FLAGS.update_batch_size
@@ -28,6 +28,7 @@ class MIL(object):
         # Dimension of input and output of the model
         self._dO = len(img_idx) + len(state_idx)
         self._dU = dU
+        self._dT = dT
 
     def init_network(self, graph, input_tensors=None, restore_iter=0, prefix='Training_'):
         """ Helper method to initialize the tf networks used """
@@ -503,11 +504,15 @@ class MIL(object):
             self.stateb = stateb = tf.placeholder(tf.float32, name='stateb')
             self.actiona = actiona = tf.placeholder(tf.float32, name='actiona')
             self.actionb = actionb = tf.placeholder(tf.float32, name='actionb')
+            self.targeta = targeta = tf.placeholder(tf.float32, name='targeta')
+            self.targetb = targetb = tf.placeholder(tf.float32, name='targetb')
         else:
             statea = self.statea
             stateb = self.stateb
             actiona = self.actiona
             actionb = self.actionb
+            targeta = self.targeta
+            targetb = self.targetb
 
         inputa = tf.concat(axis=2, values=[statea, obsa])
         inputb = tf.concat(axis=2, values=[stateb, obsb])
