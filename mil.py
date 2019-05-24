@@ -54,14 +54,18 @@ class MIL(object):
                 self.total_loss1 = total_losses1[0]
                 self.total_losses2 = total_losses2
                 self.total_final_eept_losses2 = total_final_eept_losses2
+                self.outputas = outputas
+                self.outputbs = outputbs
             elif 'Validation' in prefix:
                 self.val_total_losses1 = total_losses1
                 self.val_total_loss1 = total_losses1[0]
                 self.val_total_losses2 = total_losses2
                 self.val_total_final_eept_losses2 = total_final_eept_losses2
+                self.val_outputas = outputas
+                self.val_outputbs = outputbs
 
             if 'Training' in prefix:
-                decay_steps = 50000
+                decay_steps = FLAGS.metatrain_iterations
                 lr_decayed = tf.train.cosine_decay(self.meta_lr, self.global_step, decay_steps)
                 #lr_decayed = tf.train.exponential_decay(self.meta_lr, self.global_step, 1000, 0.96, staircase=True)
                 #lr_decayed = self.meta_lr

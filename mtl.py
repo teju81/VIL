@@ -65,7 +65,7 @@ class MTL(object):
                 self.val_smaxbs = smaxbs
 
             if 'Training' in prefix:
-                decay_steps = 50000
+                decay_steps = FLAGS.metatrain_iterations
                 lr_decayed = tf.train.cosine_decay(self.meta_lr, self.global_step, decay_steps)
                 #lr_decayed = tf.train.exponential_decay(self.meta_lr, self.global_step, 1000, 0.96, staircase=True)
                 #lr_decayed = self.meta_lr
