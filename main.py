@@ -31,10 +31,10 @@ flags.DEFINE_bool('zero_state', False, 'zero-out states (meta-learn state) in th
 flags.DEFINE_bool('two_arms', False, 'use two-arm structure when state is zeroed-out')
 flags.DEFINE_integer('training_set_size', -1, 'size of the training set, 1500 for vision_reach and \
                                                 -1 for all data except those in validation set')
-flags.DEFINE_integer('val_set_size', 50, 'size of the training set, 150 for vision_reach')
+flags.DEFINE_integer('val_set_size', 150, 'size of the training set, 150 for vision_reach')
 
 ## Training options
-flags.DEFINE_integer('metatrain_iterations', 50000, 'number of metatraining iterations.') # 50k for reaching
+flags.DEFINE_integer('metatrain_iterations', 15000, 'number of metatraining iterations.') # 50k for reaching
 flags.DEFINE_integer('meta_batch_size', 5, 'number of tasks sampled per meta-update') # 5 for reaching
 flags.DEFINE_float('meta_lr', 0.01, 'the base learning rate of the generator') # Beta
 flags.DEFINE_integer('update_batch_size', 1, 'number of examples used for inner gradient update (K for K-shot learning).')
@@ -123,6 +123,9 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
         training_range = range(TOTAL_ITERS)
     else:
         training_range = range(restore_itr+1, TOTAL_ITERS)
+    best_model_val_preloss_first_step = 1000
+    best_model_val_preloss_last_step = 1000
+    best_model_val_postloss = 1000
     for itr in training_range:
         state, action, target = data_generator.generate_data_batch(itr)
         statea = state[:, :FLAGS.update_batch_size*FLAGS.T, :]
@@ -173,6 +176,7 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
                 pass
             print('output B')
             print(results[3][-1][0,:24,:])
+
             prelosses1, postlosses1, postlosses2 = [], [], []
 
         if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
@@ -194,12 +198,23 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
                 with graph.as_default():
                     results = sess.run(input_tensors, feed_dict=feed_dict)
                 train_writer.add_summary(results[0], itr)
-                print('Test results: average preloss1 is %.2f, average postloss1 is %.2f, average postloss is %.2f' % (np.mean(results[1]), np.mean(results[2]), np.mean(results[3])))
+                val_preloss_first_step = np.mean(results[1])
+                val_preloss_last_step = np.mean(results[2])
+                val_postloss = np.mean(results[3])
+                print('Test results: average preloss1 is %.2f, average postloss1 is %.2f, average postloss is %.2f' % (val_preloss_first_step, val_preloss_last_step, val_postloss))
 
         if itr != 0 and (itr % SAVE_INTERVAL == 0 or itr == training_range[-1]):
-            print('Saving model to: %s' % (save_dir + '_%d' % itr))
-            with graph.as_default():
-                saver.save(sess, save_dir + '_%d' % itr)
+            print('Best model results: average preloss1 is %.2f, average postloss1 is %.2f, average postloss is %.2f' % (best_model_val_preloss_first_step, best_model_val_preloss_last_step, best_model_val_postloss))
+            if val_postloss < best_model_val_postloss and val_postloss < val_preloss_last_step:
+                best_model_val_preloss_first_step = val_preloss_first_step
+                best_model_val_preloss_last_step = val_preloss_last_step
+                best_model_val_postloss = val_postloss
+
+                print('Saving model to: %s' % (save_dir + '_%d' % itr))
+                with graph.as_default():
+                    saver.save(sess, save_dir + '_%d' % itr)
+            else:
+                print('Not saving as model is not the best')
 
 def main():
     tf.set_random_seed(FLAGS.random_seed)
