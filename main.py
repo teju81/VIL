@@ -12,7 +12,7 @@ FLAGS = flags.FLAGS
 LOGGER = logging.getLogger(__name__)
 
 ## Dataset/method options
-flags.DEFINE_string('experiment', 'vision_reach', 'sim_vision_reach or sim_push')
+flags.DEFINE_string('experiment', 'target_vision_reach', 'target_vision_reach, action_vision_reach or sim_push')
 flags.DEFINE_string('demo_file', '/home/raviteja/code/python/VIL/data/vision_reach/color_data', 'path to the directory where demo files that containing robot states and actions are stored')
 flags.DEFINE_string('demo_gif_dir', '/home/raviteja/code/python/VIL/data/vision_reach/color_data/', 'path to the videos of demonstrations')
 flags.DEFINE_string('gif_prefix', 'color', 'prefix of the video directory for each task, e.g. object_0 for task 0')
@@ -153,12 +153,24 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
             print('Iteration %d: average preloss1 is %.2f, average postloss1 is %.2f, average postloss2 is %.2f' % (itr, np.mean(prelosses1), np.mean(postlosses1), np.mean(postlosses2)))
             print('learning rates')
             print(results[1])
-            print('target A')
-            print(targeta[0,:24,:])
+            if FLAGS.experiment == 'target_vision_reach':
+                print('target A')
+                print(targeta[0,:24,:])
+            elif FLAGS.experiment == 'action_vision_reach':
+                print('action A')
+                print(actiona[0,:24,:])
+            else:
+                pass
             print('output A')
             print(results[2][-1][0,:24,:])
-            print('target B')
-            print(targetb[0,:24,:])
+            if FLAGS.experiment == 'target_vision_reach':
+                print('target B')
+                print(targetb[0,:24,:])
+            elif FLAGS.experiment == 'action_vision_reach':
+                print('action B')
+                print(actionb[0,:24,:])
+            else:
+                pass
             print('output B')
             print(results[3][-1][0,:24,:])
             prelosses1, postlosses1, postlosses2 = [], [], []
@@ -219,7 +231,10 @@ def main():
     state_idx = data_generator.state_idx
     img_idx = range(len(state_idx), len(state_idx)+FLAGS.im_height*FLAGS.im_width*FLAGS.num_channels)
     # need to compute x_idx and img_idx from data_generator
-    model = MTL(data_generator._dU, data_generator._dT, state_idx=state_idx, img_idx=img_idx, network_config=network_config)
+    if FLAGS.experiment == 'target_vision_reach':
+        model = MTL(data_generator._dU, data_generator._dT, state_idx=state_idx, img_idx=img_idx, network_config=network_config)
+    else:
+        model = MIL(data_generator._dU, data_generator._dT, state_idx=state_idx, img_idx=img_idx, network_config=network_config)
     # TODO: figure out how to save summaries and checkpoints
     exp_string = FLAGS.experiment+ '.' + FLAGS.init + '_init.' + str(FLAGS.num_conv_layers) + '_conv' + '.' + str(FLAGS.num_strides) + '_strides' + '.' + str(FLAGS.num_filters) + '_filters' + \
                 '.' + str(FLAGS.num_fc_layers) + '_fc' + '.' + str(FLAGS.layer_size) + '_dim' + '.bt_dim_' + str(FLAGS.bt_dim) + '.mbs_'+str(FLAGS.meta_batch_size) + \
