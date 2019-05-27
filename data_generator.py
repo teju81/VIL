@@ -28,6 +28,7 @@ class DataGenerator(object):
         self.update_batch_size = FLAGS.update_batch_size
         self.test_batch_size = FLAGS.train_update_batch_size if FLAGS.train_update_batch_size != -1 else self.update_batch_size
         self.meta_batch_size = FLAGS.meta_batch_size
+        self.batch_image_size = (self.update_batch_size + self.test_batch_size) * self.meta_batch_size
         self.T = FLAGS.T
         self.demo_gif_dir = FLAGS.demo_gif_dir
         self.gif_prefix = FLAGS.gif_prefix
@@ -281,12 +282,13 @@ class DataGenerator(object):
                         sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
                         sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
                         sampled_images = list(chain.from_iterable(sampled_images))
-                        if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
+                        sampled_images = [image_folder_paths[i] + '/' + image_folder_paths[i].split('/')[-1] for i in sampled_image_folder_idx]
+                        if len(sampled_images) != (self.update_batch_size+self.test_batch_size):
                           print(sampled_folder)
                           print(sampled_image_folder_idx)
                           print(len(sampled_images))
                           print(sampled_images)
-                        assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                        assert len(sampled_images) == (self.update_batch_size+self.test_batch_size)
                         self.all_training_filenames.extend(sampled_images)
                         self.training_batch_idx[itr][idx] = sampled_image_folder_idx
                     if itr != 0 and itr % TEST_PRINT_INTERVAL == 0:
@@ -300,19 +302,20 @@ class DataGenerator(object):
                             sampled_image_folder_idx = np.random.choice(range(len(image_folder_paths)), size=self.update_batch_size+self.test_batch_size, replace=False) # True
                             sampled_images = [natsorted(glob.glob(os.path.join(sampled_folder, image_folder_paths[i])+'/*.png')) for i in sampled_image_folder_idx]
                             sampled_images = list(chain.from_iterable(sampled_images))
-                            if len(sampled_images) != self.T*(self.update_batch_size+self.test_batch_size):
+                            sampled_images = [image_folder_paths[i] + '/' + image_folder_paths[i].split('/')[-1] for i in sampled_image_folder_idx]
+                            if len(sampled_images) != (self.update_batch_size+self.test_batch_size):
                               print(sampled_folder)
                               print(sampled_image_folder_idx)
                               print(len(sampled_images))
                               print(sampled_images)
-                            assert len(sampled_images) == self.T*(self.update_batch_size+self.test_batch_size)
+                            assert len(sampled_images) == (self.update_batch_size+self.test_batch_size)
                             self.all_val_filenames.extend(sampled_images)
                             self.val_batch_idx[itr][idx] = sampled_image_folder_idx
 
     # Retrieves a batch of video demonstrations given the iteration
     def make_png_batch_tensor(self, network_config, restore_iter=0, train=True):
         TEST_PRINT_INTERVAL = FLAGS.test_print_interval
-        batch_image_size = (self.update_batch_size + self.test_batch_size) * self.T * self.meta_batch_size
+        batch_image_size = (self.update_batch_size + self.test_batch_size) * self.meta_batch_size
         if train:
             all_filenames = self.all_training_filenames
             if restore_iter > 0:
@@ -321,36 +324,26 @@ class DataGenerator(object):
             all_filenames = self.all_val_filenames
             if restore_iter > 0:
                 all_filenames = all_filenames[batch_image_size*(int(restore_iter/TEST_INTERVAL)+1):]
-        im_height = network_config['image_height']
-        im_width = network_config['image_width']
-        num_channels = network_config['image_channels']
-        # make queue for tensorflow to read from
-        filename_queue = tf.train.string_input_producer(tf.convert_to_tensor(all_filenames), shuffle=False)
-        image_reader = tf.WholeFileReader()
-        _, image_file = image_reader.read(filename_queue)
-        image = tf.image.decode_png(image_file)
-        # should be 1 x C x W x H
-        image.set_shape((im_height, im_width, num_channels))
-        image = tf.cast(image, tf.float32)
-        image /= 255.0
-        #image = tf.transpose(image, perm=[0, 3, 2, 1]) # transpose to mujoco setting for images
-        #image = tf.reshape(image, [self.T, -1])
-        num_preprocess_threads = 1 # TODO - enable this to be set to >1
-        min_queue_examples = 64 #128 #256
-        capacity = min_queue_examples + 3 * batch_image_size
-        images = tf.train.batch(
-                [image],
-                batch_size = batch_image_size,
-                num_threads=num_preprocess_threads,
-                capacity=capacity,
-                )
-        all_images = []
-        for i in range(self.meta_batch_size):
-            image = images[i*self.T*(self.update_batch_size+self.test_batch_size):(i+1)*self.T*(self.update_batch_size+self.test_batch_size)]
-            image = tf.reshape(image, [(self.update_batch_size+self.test_batch_size)*self.T, -1])
-            all_images.append(image)
-        tf_all_images = tf.stack(all_images)
-        return tf_all_images
+
+        def parse_function(filename):
+            images = []
+            img_strings = []
+            for frame_idx in range(self.T):
+                image_string = tf.read_file(filename+'_%d.png'%(frame_idx))
+                image = tf.image.decode_png(image_string, channels=3)
+                image = tf.image.convert_image_dtype(image, tf.float32)
+                images.append(image)
+                img_strings.append(filename+'_%d.png'%(frame_idx))
+            return (tf.stack(images), tf.stack(img_strings))
+
+        dataset = tf.data.Dataset.from_tensor_slices(all_filenames)
+        dataset = dataset.map(parse_function,num_parallel_calls=4)
+        dataset = dataset.batch(batch_image_size)
+        dataset = dataset.prefetch(1)
+        iterator = dataset.make_one_shot_iterator()
+        tf_all_images, tf_all_filenames = iterator.get_next()
+        tf_all_images = tf.reshape(tf_all_images, [self.meta_batch_size, (self.update_batch_size+self.test_batch_size)*self.T, -1])
+        return tf_all_images, tf_all_filenames
 
     # Extract Batch of Robot actions and States corresponding to the Batch of Video demonstrations
     def generate_data_batch(self, itr, train=True):

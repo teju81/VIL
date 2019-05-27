@@ -324,6 +324,7 @@ class MTL(object):
         else:
             self.obsa = obsa = input_tensors['inputa'] # meta_batch_size x update_batch_size x dim_input
             self.obsb = obsb = input_tensors['inputb']
+            self.filenames = input_tensors['filenames']
 
         if not hasattr(self, 'statea'):
             self.statea = statea = tf.placeholder(tf.float32, name='statea')

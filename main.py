@@ -7,6 +7,7 @@ from data_generator import DataGenerator
 from mil import MIL
 from mtl import MTL
 from tensorflow.python.platform import flags
+import matplotlib.pyplot as plt
 
 FLAGS = flags.FLAGS
 LOGGER = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ flags.DEFINE_integer('training_set_size', -1, 'size of the training set, 1500 fo
 flags.DEFINE_integer('val_set_size', 150, 'size of the training set, 150 for vision_reach')
 
 ## Training options
-flags.DEFINE_integer('metatrain_iterations', 15000, 'number of metatraining iterations.') # 50k for reaching
+flags.DEFINE_integer('metatrain_iterations', 1500, 'number of metatraining iterations.') # 50k for reaching
 flags.DEFINE_integer('meta_batch_size', 5, 'number of tasks sampled per meta-update') # 5 for reaching
 flags.DEFINE_float('meta_lr', 0.01, 'the base learning rate of the generator') # Beta
 flags.DEFINE_integer('update_batch_size', 1, 'number of examples used for inner gradient update (K for K-shot learning).')
@@ -143,7 +144,7 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
                     model.actionb:actionb}
         input_tensors = [model.train_op]
         if itr % SUMMARY_INTERVAL == 0 or itr % PRINT_INTERVAL == 0:
-            input_tensors.extend([model.lr_weights, model.outputas, model.outputbs, model.train_summ_op, model.total_loss1, model.total_losses1[model.num_updates-1], model.total_losses2[model.num_updates-1]])
+            input_tensors.extend([model.lr_weights, model.obsa, model.obsb, model.filenames, model.outputas, model.outputbs, model.train_summ_op, model.total_loss1, model.total_losses1[model.num_updates-1], model.total_losses2[model.num_updates-1]])
         with graph.as_default():
             results = sess.run(input_tensors, feed_dict=feed_dict)
         if itr != 0 and itr % SUMMARY_INTERVAL == 0:
@@ -164,8 +165,24 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
                 print(actiona[0,:24,:])
             else:
                 pass
+#            print('Observation A')
+#            obsa = results[2].reshape(5,24,128,128,3)
+#            obsb = results[3].reshape(5,24,128,128,3)
+#            print(data_generator.all_training_filenames[data_generator.batch_image_size*(itr):data_generator.batch_image_size*(itr+1)])
+#            for i in range(5):
+#                plt.figure(2*i+1)
+#                idx = [0, 6, 12, 18]
+#                for j in range(4):
+#                    plt.subplot(2,2,j+1)
+#                    plt.imshow(obsa[i,idx[j],:,:,:])
+#                plt.figure(2*i+2)
+#                for j in range(4):
+#                    plt.subplot(2,2,j+1)
+#                    plt.imshow(obsb[i,idx[j],:,:,:])
+#            print(results[4])
+#            plt.show()
             print('output A')
-            print(results[2][-1][0,:24,:])
+            print(results[5][-1][0,:24,:])
             if FLAGS.experiment == 'target_vision_reach':
                 print('target B')
                 print(targetb[0,:24,:])
@@ -175,7 +192,7 @@ def train(graph, model, saver, sess, data_generator, log_dir, restore_itr=0):
             else:
                 pass
             print('output B')
-            print(results[3][-1][0,:24,:])
+            print(results[6][-1][0,:24,:])
 
             prelosses1, postlosses1, postlosses2 = [], [], []
 
@@ -287,14 +304,14 @@ def main():
     if FLAGS.train:
         data_generator.generate_png_batches()
         with graph.as_default():
-            train_image_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter)
+            train_image_tensors, train_file_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter)
             inputa = train_image_tensors[:, :FLAGS.update_batch_size*FLAGS.T, :]
             inputb = train_image_tensors[:, FLAGS.update_batch_size*FLAGS.T:, :]
-            train_input_tensors = {'inputa': inputa, 'inputb': inputb}
-            val_image_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter, train=False)
+            train_input_tensors = {'inputa': inputa, 'inputb': inputb, 'filenames':train_file_tensors}
+            val_image_tensors, val_file_tensors = data_generator.make_png_batch_tensor(network_config, restore_iter=FLAGS.restore_iter, train=False)
             inputa = val_image_tensors[:, :FLAGS.update_batch_size*FLAGS.T, :]
             inputb = val_image_tensors[:, FLAGS.update_batch_size*FLAGS.T:, :]
-            val_input_tensors = {'inputa': inputa, 'inputb': inputb}
+            val_input_tensors = {'inputa': inputa, 'inputb': inputb, 'filenames':val_file_tensors}
         model.init_network(graph, input_tensors=train_input_tensors, restore_iter=FLAGS.restore_iter)
         model.init_network(graph, input_tensors=val_input_tensors, restore_iter=FLAGS.restore_iter, prefix='Validation_')
     else:
